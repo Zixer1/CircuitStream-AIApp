@@ -1,5 +1,9 @@
 import streamlit as st
 import requests
+import os
+from dotenv import load_dotenv
+from openai import OpenAI
+
 st.set_page_config(page_title="Zeus AI", page_icon="⚡", layout="wide")
 
 st.title("Welcome to Zeus, our own AI model on the Web!")
@@ -29,4 +33,13 @@ if prompt:
             fact = r.json()["fact"]
             st.write(f"{fact}")
         else:
-            st.write(f"Hello {name}, I am Zeus! Here is what you wrote: {prompt}")
+            load_dotenv()
+            client = OpenAI(
+                base_url="https://api.groq.com/openai/v1",
+                api_key = os.environ.get("AI_TOKEN") or st.secrets["AI_TOKEN"],
+            )
+            r = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            st.write(r.choices[0].message.content)
