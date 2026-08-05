@@ -9,12 +9,13 @@ import chromadb
 db = chromadb.PersistentClient(path="./chroma_db")
 brain = db.get_or_create_collection("zeus")
 memory = db.get_or_create_collection("zeus_chat")
+THRESHOLD = 1.5
 SYSTEM_PROMPT = "You are Zeus AI, a greek god with a sense of humor. You are helpful, creative, clever, and very friendly. You answer questions in a concise and clear manner. Use an obnoxiously large amount of emojis and corny puns in what you are saying and what you are responding to. YOu love to blabber about greek mythology and fun facts about greek mythology."
 
 def shorten(text, limit=500):
     return text if len(text) <= limit else text[:limit] + " ... rest removed to keep it short"
 
-def chunk_by_sentence(text, max_size = 400):
+def chunk_by_sentence(text, max_size = 700):
     sentences = text.split(". ")
     chunks, current = [], ""
     for sentence in sentences:
@@ -60,11 +61,13 @@ with st.sidebar:
         SYSTEM_PROMPT+= st.text_input("Save custom instructions to the system prompt:")
         sources = st.multiselect("Mood:", ["My first app", "My second app"])
         creativity = st.slider("Creativity:", 0.0, 1.0, 0.5)
+        remember_documents = st.slider("How many chunks to remember", 0, 15, 5)
         remember = st.slider("Recent turns to keep", 0, 10, 3)
         recall = st.slider("Old exchanges to look up", 0, 10, 3)
+        notes_only = st.checkbox("Only answer using notes")
         saved = st.form_submit_button("Save")
     if saved:
-        st.write(f"{name} saved sources: {sources} and creativity: {creativity}")
+        st.write(f"saved sources: {sources} and creativity: {creativity}")
     st.caption(f"In memory: {brain.count()} chunks")
     st.caption(f"Long term memory: {memory.count()} exchanges")
     st.caption(f"On screen: {len(st.session_state.messages)} messages")
@@ -118,18 +121,23 @@ if user_input:
         else:
             #1. Anything that is relevant to the uploaded docs:
             notes = ""
-            docs, dists = [], []
+            docs, dists, good = [], [], []
             if brain.count() > 0:
-                hits = brain.query(query_texts=[prompt], n_results=5)
+                hits = brain.query(query_texts=[prompt], n_results=remember_documents)
                 docs = hits["documents"][0]
                 dists = hits["distances"][0]
-                notes = "\n\n".join(docs)
+                good = [d for d, s in zip(docs, dists) if s < THRESHOLD]
+                notes = "\n\n".join(good)
 
             #2. Anything that is relevant to the OLD conversation
             recalled = ""
+            old_docs, old_dists, old_good = [], [], []
             if recall > 0 and memory.count() > remember:
                 found = memory.query(query_texts=[prompt], n_results=recall)
-                recalled = "\n\n".join(found["documents"][0])
+                old_docs = found["documents"][0]
+                old_dists = found["distances"][0]
+                old_good = [d for d, s in zip(docs, dists) if s < THRESHOLD]
+                recalled = "\n\n".join(old_good)
 
             if notes or recalled:
                 full_prompt = (f"If possible, answer using the notes below. If the question does not relate to the notes, use your own thinking"
@@ -143,10 +151,30 @@ if user_input:
                 full_prompt = prompt
 
             with st.expander("What I looked up"):
+                #1: Notes
                 st.caption("From your documents")
-                st.text(shorten(notes, 800) or "nothing")
+                if docs:
+                    for d, s in zip(docs, dists):
+                        mark = "kept " if s < THRESHOLD else "dropped"
+                        st.text(f"{s:.3f} {mark} {d[:70]}")
+                else:
+                    st.text("nothing found")
+                #2: Remember past convos
                 st.caption("From earlier in our conversation")
-                st.text(shorten(recalled, 800) or "nothing")
+                if old_docs:
+                    for d, s in zip(old_docs, old_dists):
+                        mark = "kept " if s < THRESHOLD else "dropped"
+                        st.text(f"{s:.3f} {mark} {d[:70]}")
+                else:
+                    st.text("nothing found")
+                #3: Recall most recent convos
+                st.caption("Recent messages I can still see")
+                recent = st.session_state.messages[:-1][-(remember * 2):]
+                if recent:
+                    for m in recent:
+                        st.text(f"{m['role']}: {shorten(m['content'], 80)}")
+                else:
+                    st.text("nothing")
 
             load_dotenv()
             client = OpenAI(
@@ -161,13 +189,17 @@ if user_input:
                     messages.append({"role": m["role"], "content": shorten(m["content"])})
             messages.append({"role": "user", "content": full_prompt})
 
-        r = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                temperature=creativity,
-                messages=messages,
-        )
-        answer = r.choices[0].message.content
-        st.write(answer)
+            if brain.count() > 0 and not good and not old_good and notes_only:
+                answer = "I don't have anything about that in your notes"
+                st.write(answer)
+            else:
+                r = client.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        temperature=creativity,
+                        messages=messages,
+                )
+                answer = r.choices[0].message.content
+                st.write(answer)
 
         remember_exchange(prompt, answer)
     st.session_state.messages.append({"role": "assistant", "content": answer})
