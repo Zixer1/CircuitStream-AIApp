@@ -23,6 +23,7 @@ EARLIER
 RULES
 - Use the context above if it exists.
 - If the answer is not there, and the questions is asking something specific, skip it and say so.
+-After each fact, put the source number it came from, like [Source 1], when applicable
 
 QUESTION
 {questions}
@@ -151,7 +152,7 @@ if user_input:
                     if s < THRESHOLD:
                         good.append(d)
                         used_sources.append(f"{m['source']} (chunk {m['chunk']})")
-                notes = "\n\n".join(good)
+                notes = "\n\n".join(f"[Source {i+1}] {d}" for i, d in enumerate(good))
 
             #2. Anything that is relevant to the OLD conversation
             recalled = ""
@@ -219,6 +220,7 @@ if user_input:
                 answer = r.choices[0].message.content
                 st.write(answer)
                 if used_sources:
-                    st.caption("Sources: " + ", ".join(sorted(set(used_sources))))
+                    for i, src in enumerate(used_sources):
+                        st.caption(f"Source {i+1}: {src}")
         remember_exchange(prompt, answer)
     st.session_state.messages.append({"role": "assistant", "content": answer})
